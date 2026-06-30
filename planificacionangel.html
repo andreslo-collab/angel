@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cuadro de Mandos Operativo - ENUE</title>
+    <!-- Tailwind CSS v4 -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.1.7"></script>
+    <style type="text/tailwindcss">
+        @theme {
+            --color-enue-dark: #09090b;
+            --color-enue-panel: rgba(24, 24, 27, 0.7);
+            --color-enue-accent: #6366f1; /* Índigo elegante */
+        }
+        body {
+            background-color: var(--color-enue-dark);
+            color: #f4f4f5;
+            font-family: system-ui, -apple-system, sans-serif;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(168, 85, 247, 0.04) 0%, transparent 40%);
+            background-attachment: fixed;
+        }
+        /* Efecto de cristal esmerilado */
+        .glass-panel {
+            background: var(--color-enue-panel);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-panel:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+        }
+        /* Ocultar barra de scroll pero mantener funcionalidad */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+    <script src="https://unpkg.com/@babel/standalone@7.26.10/babel.min.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.3.1",
+            "react/": "https://esm.sh/react@18.3.1/",
+            "react-dom": "https://esm.sh/react-dom@18.3.1",
+            "react-dom/": "https://esm.sh/react-dom@18.3.1/",
+            "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.474.0?external=react",
+            "papaparse": "https://esm.sh/papaparse@5.4.1"
+        }
+    }
+    </script>
+</head>
+<body class="selection:bg-indigo-500/30">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module" data-presets="react">
+        import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            Search, Clock, Users, Building2, RefreshCw, Calendar, Download, 
+            ChevronRight, AlertTriangle, Hammer, ShieldAlert, Sparkles, MapPin, CheckCircle
+        } from 'lucide-react';
+        import Papa from 'papaparse';
+
+        // ============================================================================
+        // 🚨 CONFIGURACIÓN CENTRAL - ENLACE DIRECTO CSV DE TU GOOGLE SHEETS
+        // ============================================================================
+        const GOOGLE_SHEETS_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRZLkQh7aAvozNWkZsB5FNmB-iJ5tP4HonpE8ZctefTQeFNAYa4vUlFqPnBvaqqzkRXj4l5y0y3o--I/pub?output=csv";
+
+        // Días laborables mapeados
+        const DAYS_OF_WEEK = ["LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO"];
+
+        /**
+         * Procesador inteligente de la cuadrícula de planificación semanal
+         */
+        function parsePlanningCSV(csvText) {
+            const parsed = Papa.parse(csvText, { skipEmptyLines: true, header: false });
+            const rows = parsed.data || [];
+            if (rows.length === 0) return { tasks: [], works: [] };
+
+            // 1. Encontrar la fila que tiene los nombres de las obras
+            // Buscaremos la fila que contenga "GENERAL ELIO" o similar, o la fila 1 por defecto
+            let worksRowIndex = rows.findIndex(row => row.some(cell => cell && cell.toUpperCase().includes("GENERAL ELIO")));
+            if (worksRowIndex === -1) worksRowIndex = 1; // Fallback
+            
+            const worksLine = rows[worksRowIndex] || [];
+            
+            // Recoger todas las obras válidas y su índice de columna
+            const obrasMapped = [];
+            for (let col = 1; col < worksLine.length; col++) {
+                const nombreObra = (worksLine[col] || "").trim();
+                if (nombreObra && nombreObra !== "" && nombreObra.toUpperCase() !== "REPARTOS") {
+                    obrasMapped.push({
+                        colIndex: col,
+                        name: nombreObra
+                    });
+                }
+            }
+
+            const tasksList = [];
+
+            // 2. Mapear cada uno de los días
+            DAYS_OF_WEEK.forEach(dayName => {
+                // Buscamos la fila cuyo primer elemento coincida con el día (limpiando tildes y espacios)
+                const normalizedDay = dayName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+                
+                const dayRowIndex = rows.findIndex(row => {
+                    if (!row[0]) return false;
+                    const cellVal = row[0].trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+                    return cellVal === normalizedDay;
+                });
+
+                if (dayRowIndex !== -1) {
+                    const dayRow = rows[dayRowIndex];
+                    
+                    obrasMapped.forEach(obra => {
+                        const cellContent = (dayRow[obra.colIndex] || "").trim();
+                        
+                        // Omitir si la celda está vacía o dice "nadie"
+                        const isVacant = !cellContent || 
+                                         cellContent === "" || 
+                                         cellContent.toLowerCase() === "nadie" || 
+                                         cellContent.toLowerCase() === "ninguno" || 
+                                         cellContent === "-";
+
+                        if (!isVacant) {
+                            // Extrae operarios de la descripción si siguen el formato "Nombre: Tarea"
+                            let operariosVal = "";
+                            let descVal = cellContent;
+                            
+                            const colonIndex = cellContent.indexOf(":");
+                            if (colonIndex > 0 && colonIndex < 35) { // Un nombre o nombres cortos antes del ":"
+                                operariosVal = cellContent.substring(0, colonIndex).trim();
+                                descVal = cellContent.substring(colonIndex + 1).trim();
+                            } else {
+                                // Sino, intenta clasificar nombres conocidos o lo pone todo en la descripción
+                                operariosVal = "Asignado";
+                            }
+
+                            // Detecta si es una columna especial de cambios de última hora
+                            const isAlerta = obra.name.toUpperCase().includes("CAMBIOS") || 
+                                             obra.name.toUpperCase().includes("ULTIMA HORA") || 
+                                             obra.name.toUpperCase().includes("ALERTA");
+
+                            tasksList.push({
+                                id: `${dayName}-${obra.name}-${obra.colIndex}`,
+                                dia: dayName,
+                                obra: obra.name,
+                                operarios: operariosVal,
+                                descripcion: descVal,
+                                esAlerta: isAlerta
+                            });
+                        }
+                    });
+                }
+            });
+
+            return {
+                tasks: tasksList,
+                works: obrasMapped.map(o => o.name)
+            };
+        }
+
+        function App() {
+            const [tasks, setTasks] = useState([]);
+            const [worksList, setWorksList] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            
+            const [currentDay, setCurrentDay] = useState("");
+            const [viewMode, setViewMode] = useState("DIAS"); // DÍAS, OBRAS, EQUIPOS
+            const [selectedWork, setSelectedProject] = useState(null);
+            const [isExporting, setIsExporting] = useState(false);
+
+            // Cargar fecha actual para preseleccionar el día de la semana
+            useEffect(() => {
+                const daysMap = ["SÁBADO", "LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO"];
+                const dayNum = new Date().getDay(); // 0 = Dom, 1 = Lun...
+                const todayName = daysMap[dayNum] || "LUNES";
+                setCurrentDay(todayName);
+            }, []);
+
+            const syncData = async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                    // Forzar salto de caché en la consulta directa a Google
+                    const nocacheUrl = `${GOOGLE_SHEETS_CSV_URL}&t=${new Date().getTime()}`;
+                    const res = await fetch(nocacheUrl, { redirect: "follow" });
+                    
+                    if (!res.ok) throw new Error("Verifica que tu Google Sheets esté publicado correctamente.");
+                    
+                    const csvText = await res.text();
+                    const { tasks: parsedTasks, works } = parsePlanningCSV(csvText);
+                    
+                    setTasks(parsedTasks);
+                    setWorksList(works);
+                } catch (err) {
+                    setError(`Error de comunicación: ${err.message}`);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(() => {
+                syncData();
+            }, []);
+
+            // Filtros de datos agrupados
+            const tasksByDay = useMemo(() => {
+                const grouped = {};
+                DAYS_OF_WEEK.forEach(day => grouped[day] = []);
+                tasks.forEach(t => {
+                    if (grouped[t.dia]) grouped[t.dia].push(t);
+                });
+                return grouped;
+            }, [tasks]);
+
+            // Descarga de PDF de un día específico (Plan B Aislado para Vercel)
+            const handleExportDay = (dayId) => {
+                setIsExporting(true);
+                const targetArea = document.getElementById(dayId);
+                if (!targetArea) return;
+
+                // Estilos de impresión eficientes e instantáneos
+                const originalContent = document.body.innerHTML;
+                const printStyle = `
+                    <style>
+                        body { background: #111 !important; color: #fff !important; padding: 20px !important; }
+                        .glass-panel { background: #1a1a24 !important; border: 1px solid #444 !important; opacity: 1 !important; }
+                        button, .no-print { display: none !important; }
+                    </style>
+                `;
+                
+                const printWindow = window.open('', '_blank');
+                printWindow.document.write(`
+                    <html>
+                        <head>
+                            <title>Planificación - ${dayId}</title>
+                            <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.1.7"><\/script>
+                            ${printStyle}
+                        </head>
+                        <body>
+                            <div class="max-w-3xl mx-auto py-8">
+                                <div class="text-center mb-6">
+                                    <h1 class="text-2xl font-bold uppercase tracking-widest text-indigo-400">PLANIFICACIÓN DIARIA ENUE</h1>
+                                    <p class="text-sm text-gray-400">Día: ${dayId}</p>
+                                </div>
+                                ${targetArea.outerHTML}
+                            </div>
+                            <script>
+                                setTimeout(() => { window.print(); window.close(); }, 500);
+                            <\/script>
+                        </body>
+                    </html>
+                `);
+                printWindow.document.close();
+                setIsExporting(false);
+            };
+
+            return (
+                <div className="max-w-4xl mx-auto p-4 md:p-6 pb-24 min-h-screen flex flex-col">
+                    {/* Header */}
+                    <header className="flex justify-between items-center mb-8 border-b border-white/10 pb-6">
+                        <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-2xl shadow-lg shadow-indigo-600/20">
+                                E
+                            </div>
+                            <div>
+                                <h1 className="text-xl md:text-2xl font-black tracking-tight text-white flex items-center gap-2">
+                                    ENUE Producción <span className="text-xs bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full font-bold">DRIVE LIVE</span>
+                                </h1>
+                                <p className="text-xs text-gray-400">ORGANIZACIÓN DE OBRAS EN VIVO</p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <button 
+                                onClick={syncData}
+                                disabled={loading}
+                                className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer active:scale-95 transition-all text-gray-300"
+                            >
+                                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                                <span className="hidden sm:inline">Recargar</span>
+                            </button>
+                            <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs px-3 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-sm">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                Sincronizado
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Alerta de Error */}
+                    {error && (
+                        <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-300 rounded-2xl flex items-start gap-3 mb-6">
+                            <AlertTriangle className="w-5 h-5 flex-shrink-0 text-red-400 mt-0.5" />
+                            <div>
+                                <h3 className="font-bold text-sm">Fallo de lectura</h3>
+                                <p className="text-xs text-gray-400 leading-relaxed mt-0.5">{error}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Vistas Navegación */}
+                    <div className="grid grid-cols-3 bg-white/5 border border-white/15 p-1 rounded-2xl gap-1 mb-8 shadow-inner select-none">
+                        <button 
+                            onClick={() => setViewMode("DIAS")} 
+                            className={`py-3 rounded-xl text-xs font-bold tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all ${viewMode === "DIAS" ? 'bg-indigo-600 shadow text-white' : 'text-gray-400 hover:text-white'}`}
+                        >
+                            <Calendar className="w-4 h-4" /> POR DÍAS
+                        </button>
+                        <button 
+                            onClick={() => setViewMode("OBRAS")} 
+                            className={`py-3 rounded-xl text-xs font-bold tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all ${viewMode === "OBRAS" ? 'bg-indigo-600 shadow text-white' : 'text-gray-400 hover:text-white'}`}
+                        >
+                            <Building2 className="w-4 h-4" /> POR OBRAS
+                        </button>
+                        <button 
+                            onClick={() => setViewMode("EQUIPOS")} 
+                            className={`py-3 rounded-xl text-xs font-bold tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all ${viewMode === "EQUIPOS" ? 'bg-indigo-600 shadow text-white' : 'text-gray-400 hover:text-white'}`}
+                        >
+                            <Users className="w-4 h-4" /> EQUIPOS
+                        </button>
+                    </div>
+
+                    {/* Vista Por Días */}
+                    {viewMode === "DIAS" && (
+                        <div className="space-y-6">
+                            {/* Selector Desplazable de Días */}
+                            <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar border-b border-white/5 select-none">
+                                {DAYS_OF_WEEK.map(day => {
+                                    const numTasks = tasksByDay[day]?.length || 0;
+                                    return (
+                                        <button
+                                            key={day}
+                                            onClick={() => setCurrentDay(day)}
+                                            className={`px-5 py-3.5 rounded-2xl flex-shrink-0 text-xs font-bold tracking-wider flex items-center gap-2 cursor-pointer transition-all ${currentDay === day ? 'bg-white text-black shadow-md' : 'bg-enue-panel border border-white/5 text-gray-400 hover:text-white'}`}
+                                        >
+                                            {day}
+                                            {numTasks > 0 && (
+                                                <span className={`px-1.5 py-0.5 rounded-md text-[10px] ${currentDay === day ? 'bg-black text-white' : 'bg-indigo-500/20 text-indigo-300'}`}>
+                                                    {numTasks}
+                                                </span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Contenido del Día */}
+                            {currentDay && (
+                                <div id={currentDay} className="animate-in fade-in duration-300 space-y-4">
+                                    <div className="flex justify-between items-center mb-2 px-1">
+                                        <h2 className="text-xl font-extrabold tracking-widest text-indigo-400 flex items-center gap-2 uppercase">
+                                            Planificación {currentDay}
+                                        </h2>
+                                        <button 
+                                            onClick={() => handleExportDay(currentDay)}
+                                            className="px-3.5 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-xl text-xs font-semibold text-indigo-300 flex items-center gap-1.5 cursor-pointer"
+                                        >
+                                            <Download className="w-3.5 h-3.5" /> PDF
+                                        </button>
+                                    </div>
+
+                                    {/* Alertas de Última Hora */}
+                                    {tasksByDay[currentDay]?.filter(t => t.esAlerta).map(t => (
+                                        <div key={t.id} className="p-5 rounded-2xl bg-indigo-950/40 border-2 border-indigo-500/30 relative overflow-hidden flex flex-col md:flex-row gap-4 items-start shadow-xl shadow-indigo-950/10">
+                                            <div className="sticky top-0 p-2.5 bg-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-300 shadow">
+                                                <Sparkles className="w-5 h-5 animate-pulse" />
+                                            </div>
+                                            <div className="flex-1 space-y-1">
+                                                <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-widest">ALERTA - CAMBIO DE ÚLTIMA HORA</h4>
+                                                <p className="text-sm font-semibold text-white/90 whitespace-pre-wrap mt-1 leading-relaxed">{t.descripcion}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+
+                                    {/* Lista de Obras Normales */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {tasksByDay[currentDay]?.filter(t => !t.esAlerta).map(t => (
+                                            <div key={t.id} className="p-5 rounded-2xl glass-panel flex flex-col gap-4">
+                                                <div className="flex items-start justify-between border-b border-white/5 pb-3">
+                                                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-400 flex items-center gap-1">
+                                                        <MapPin className="w-3.5 h-3.5" /> {t.obra}
+                                                    </span>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <div className="p-2.5 bg-white/5 rounded-xl border border-white/5 flex gap-2 items-center">
+                                                        <Users className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                                        <span className="text-sm font-bold text-gray-200">{t.operarios}</span>
+                                                    </div>
+                                                    <p className="text-sm text-gray-300 leading-relaxed pl-1 whitespace-pre-wrap font-medium">
+                                                        {t.descripcion}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {tasksByDay[currentDay]?.length === 0 && (
+                                        <div className="p-16 rounded-2xl border border-dashed border-white/10 text-center text-gray-500">
+                                            No hay asignaciones cargadas para el {currentDay}. Todo en calma.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Vista Por Obras */}
+                    {viewMode === "OBRAS" && (
+                        <div className="space-y-6">
+                            <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar border-b border-white/5 select-none">
+                                {worksList.map(work => {
+                                    const numTasks = tasks.filter(t => t.obra === work).length;
+                                    return (
+                                        <button
+                                            key={work}
+                                            onClick={() => setSelectedProject(work)}
+                                            className={`px-4 py-3 rounded-xl flex-shrink-0 text-xs font-bold tracking-wider flex items-center gap-2 cursor-pointer transition-all ${selectedWork === work ? 'bg-white text-black shadow-md' : 'bg-enue-panel border border-white/5 text-gray-400 hover:text-white'}`}
+                                        >
+                                            {work}
+                                            {numTasks > 0 && (
+                                                <span className={`px-1.5 py-0.5 rounded-md text-[10px] ${selectedWork === work ? 'bg-black text-white' : 'bg-indigo-500/20 text-indigo-300'}`}>
+                                                    {numTasks}
+                                                </span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {selectedWork ? (
+                                <div className="space-y-4 animate-in fade-in duration-300">
+                                    <h2 className="text-xl font-extrabold tracking-widest text-indigo-400 flex items-center gap-2 uppercase">
+                                        Planificación {selectedWork}
+                                    </h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {tasks.filter(t => t.obra === selectedWork).map(t => (
+                                            <div key={t.id} className="p-5 rounded-2xl glass-panel flex flex-col gap-3">
+                                                <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                                                    <span className="text-xs font-black uppercase tracking-widest text-indigo-300">{t.dia}</span>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <p className="text-sm font-bold text-white flex items-center gap-1.5">
+                                                        <Users className="w-4 h-4 text-gray-400" />
+                                                        {t.operarios}
+                                                    </p>
+                                                    <p className="text-sm text-gray-300 leading-relaxed font-medium whitespace-pre-wrap">{t.descripcion}</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="p-16 rounded-2xl border border-dashed border-white/10 text-center text-gray-500">
+                                    Selecciona una obra en la barra superior para inspeccionar su cuadrante semanal.
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Vista Equipos / Buscador global */}
+                    {viewMode === "EQUIPOS" && (
+                        <div className="space-y-6">
+                            <div className="bg-enue-panel border border-white/5 p-4 rounded-2xl flex flex-col gap-2">
+                                <label className="text-xs font-bold text-gray-400 tracking-wider">BUSCADOR DE OPERARIO O TAREA</label>
+                                <div className="relative">
+                                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                    <input 
+                                        type="text" 
+                                        placeholder="Ej: Ángel, Didier, alicatado, pladur..."
+                                        className="w-full bg-[#09090b] border border-white/10 rounded-xl pl-9 pr-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all font-medium placeholder:text-gray-500"
+                                        id="workerSearch"
+                                        onChange={(e) => syncData()} // Force update locally or query
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {tasks.map(t => (
+                                    <div key={t.id} className="p-5 rounded-2xl glass-panel flex flex-col gap-4">
+                                        <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                                            <span className="text-[10px] font-bold tracking-widest uppercase bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full">{t.dia}</span>
+                                            <span className="text-xs font-semibold text-gray-400">{t.obra}</span>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <p className="text-sm font-bold text-white flex items-center gap-1.5"><Users className="w-4 h-4 text-gray-400" /> {t.operarios}</p>
+                                            <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap font-medium">{t.descripcion}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
